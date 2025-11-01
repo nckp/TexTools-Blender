@@ -86,8 +86,9 @@ def calculate_max_extent_from_angle(bounds, azim_deg, elev_deg):
         x_proj = abs(offset.dot(right))
         y_proj = abs(offset.dot(up))
 
-        # Maximum extent in either direction
-        extent = max(x_proj, y_proj)
+        # Use diagonal distance in screen space to account for corners
+        # This ensures the entire bounding box fits, even at diagonal angles
+        extent = math.sqrt(x_proj**2 + y_proj**2)
         max_extent = max(max_extent, extent)
 
     return max_extent
@@ -137,7 +138,7 @@ def cam_position(center, distance, azim_deg, elev_deg):
     return Vector((x, y, z))
 
 
-def create_temp_camera(name, location, target, settings):
+def create_temp_camera(name, location, target, settings, distance=None, bounds_radius=None):
     """
     Create temporary camera pointing at target.
 
@@ -146,6 +147,8 @@ def create_temp_camera(name, location, target, settings):
         location: Camera location
         target: Target point to look at
         settings: UNetExporterSettings
+        distance: Camera distance from target (optional, for clipping calculation)
+        bounds_radius: Object bounding sphere radius (optional, for clipping calculation)
 
     Returns:
         Tuple of (camera_object, target_empty)
@@ -158,8 +161,17 @@ def create_temp_camera(name, location, target, settings):
     cam.lens = settings.focal_length
     cam.sensor_width = 36.0
     cam.sensor_height = 36.0
-    cam.clip_start = 0.01
-    cam.clip_end = 10000.0
+
+    # Calculate dynamic clipping planes based on distance and bounds
+    if distance is not None and bounds_radius is not None:
+        # Clip start: distance to object minus radius, with safety margin
+        cam.clip_start = max(0.001, distance - bounds_radius * 2.0)
+        # Clip end: distance to object plus radius, with safety margin
+        cam.clip_end = distance + bounds_radius * 2.0
+    else:
+        # Fallback to safe defaults
+        cam.clip_start = 0.01
+        cam.clip_end = 10000.0
 
     empty = bpy.data.objects.new(name + "_target", None)
     bpy.context.collection.objects.link(empty)
@@ -255,6 +267,8 @@ def create_emission_material(image):
     tex_node = nodes.new("ShaderNodeTexImage")
     tex_node.location = (-300, 0)
     tex_node.image = image
+    # Use nearest neighbor interpolation for crisp rendering (especially for wireframes)
+    tex_node.interpolation = 'Closest'
 
     links.new(tex_node.outputs["Color"], emission_node.inputs["Color"])
     links.new(emission_node.outputs["Emission"], output_node.inputs["Surface"])
@@ -391,12 +405,14 @@ def render_multiview_turnaround(obj, baked_images, output_dirs, settings, mesh_i
             az = azimuth_angles[view_idx]
             loc = cam_position(bounds["center"], optimal_dist, az, elevation)
 
-            # Create camera
+            # Create camera with dynamic clipping planes
             cam, tgt = create_temp_camera(
                 f"TempCam_view{view_idx:02d}",
                 loc,
                 target_point,
-                settings
+                settings,
+                distance=optimal_dist,
+                bounds_radius=bounds["radius"]
             )
             temp_objs += [cam, tgt]
 
