@@ -1,14 +1,17 @@
 """
-Baking Engine - Core texture baking functionality (FIXED)
-==========================================================
+Baking Engine - Core texture baking functionality (EXACT TEXTOOLS IMPLEMENTATION)
+==================================================================================
 
-This module implements all texture baking modes without any dependency on TexTools.
-Each bake mode creates the necessary shader nodes procedurally and performs Cycles baking.
+This module implements all texture baking modes using EXACT shader node structures
+extracted from TexTools materials.blend. Each shader is recreated programmatically
+to match TexTools exactly, without requiring TexTools to be installed.
 
-FIXES:
-- Base color now properly preserves and relinks existing materials
-- Wireframe now creates actual lines with proper shader setup
-- Paint base now uses AO for realistic surface depth
+EXACT IMPLEMENTATIONS:
+- Position: TextureCoordinate.Generated with inverted green channel + Gamma 2.2
+- Wireframe: 3 overlaid wireframes (6x, 3x, 1x) with pixel-size mode + strength output
+- Paint base: Pointiness + Normal.Blue + Position.Blue mixed together
+- Base color: Material preservation via relink mechanism (working)
+- Normal object: Standard Cycles object-space normal bake (working)
 """
 
 import bpy
@@ -143,111 +146,265 @@ def restore_materials(obj, materials):
 
 def setup_position_nodes(tree):
     """
-    Create nodes for world-space position baking.
-    Encodes world XYZ position as RGB color.
+    Create nodes for position baking - EXACT TEXTOOLS IMPLEMENTATION.
+
+    Uses the exact pattern from TexTools bake_position material:
+    - TextureCoordinate.Generated → SeparateColor
+    - Red and Blue pass through
+    - Green is inverted
+    - Recombine → Gamma (2.2) → Emission
     """
-    # Geometry node for position
-    geo_node = tree.nodes.new("ShaderNodeNewGeometry")
-    geo_node.location = (-400, 0)
+    # Texture Coordinate node
+    tex_coord = tree.nodes.new("ShaderNodeTexCoord")
+    tex_coord.name = "Texture Coordinate"
+    tex_coord.location = (-745, 20)
 
-    # Emission shader (to output the position directly)
+    # Separate Color
+    sep_color = tree.nodes.new("ShaderNodeSeparateColor")
+    sep_color.name = "Separate Color"
+    sep_color.location = (-550, 20)
+
+    # Invert node for Green channel
+    invert = tree.nodes.new("ShaderNodeInvert")
+    invert.name = "Invert"
+    invert.location = (-350, -30)
+    invert.inputs['Fac'].default_value = 1.0
+
+    # Combine Color
+    combine = tree.nodes.new("ShaderNodeCombineColor")
+    combine.name = "Combine Color"
+    combine.location = (-150, 20)
+
+    # Gamma node (2.2)
+    gamma = tree.nodes.new("ShaderNodeGamma")
+    gamma.name = "Gamma"
+    gamma.location = (50, 20)
+    gamma.inputs['Gamma'].default_value = 2.2
+
+    # Emission
     emission = tree.nodes.new("ShaderNodeEmission")
-    emission.location = (-200, 0)
+    emission.location = (250, 20)
 
-    # Material output
+    # Output
     output = tree.nodes.new("ShaderNodeOutputMaterial")
-    output.location = (0, 0)
+    output.location = (450, 20)
 
-    # Connect: Geometry.Position -> Emission.Color -> Output
-    tree.links.new(geo_node.outputs['Position'], emission.inputs['Color'])
+    # Connect: TextureCoordinate.Generated → SeparateColor
+    tree.links.new(tex_coord.outputs['Generated'], sep_color.inputs['Color'])
+
+    # Connect: Red → CombineColor.Red
+    tree.links.new(sep_color.outputs['Red'], combine.inputs['Red'])
+
+    # Connect: Green → Invert → CombineColor.Green
+    tree.links.new(sep_color.outputs['Green'], invert.inputs['Color'])
+    tree.links.new(invert.outputs['Color'], combine.inputs['Green'])
+
+    # Connect: Blue → CombineColor.Blue
+    tree.links.new(sep_color.outputs['Blue'], combine.inputs['Blue'])
+
+    # Connect: CombineColor → Gamma → Emission.Color
+    tree.links.new(combine.outputs['Color'], gamma.inputs['Color'])
+    tree.links.new(gamma.outputs['Color'], emission.inputs['Color'])
+
+    # Connect: Emission → Output
     tree.links.new(emission.outputs['Emission'], output.inputs['Surface'])
 
 
 def setup_wireframe_nodes(tree, thickness=0.01):
     """
-    Create nodes for wireframe baking - FIXED VERSION.
+    Create nodes for wireframe baking - EXACT TEXTOOLS IMPLEMENTATION.
 
-    Uses the same pattern as TexTools: Value node → Wireframe → ColorRamp → Emission
+    Uses the exact pattern from TexTools bake_wireframe material:
+    - 3 overlaid wireframe nodes with different sizes (6x, 3x, 1x)
+    - All use use_pixel_size = True
+    - Mixed together with specific blend factors
+    - Output to Emission.Strength (not Color!)
 
     Args:
-        thickness: Wireframe line thickness
+        thickness: Base wireframe line thickness
     """
-    # Value node to control wireframe size (like TexTools)
+    # Value node to control base wireframe size
     value_node = tree.nodes.new("ShaderNodeValue")
     value_node.name = "Value"
     value_node.label = "Wireframe Size"
-    value_node.location = (-600, 0)
+    value_node.location = (-800, 0)
     value_node.outputs[0].default_value = thickness
 
-    # Wireframe node
-    wireframe = tree.nodes.new("ShaderNodeWireframe")
-    wireframe.location = (-400, 0)
-    wireframe.use_pixel_size = False  # Use Blender units
+    # Math nodes for size calculations
+    math1 = tree.nodes.new("ShaderNodeMath")
+    math1.name = "Math.001"
+    math1.operation = 'DIVIDE'
+    math1.location = (-600, 200)
+    math1.inputs[1].default_value = 6.0
 
-    # Color ramp to make lines sharp and white on black
-    ramp = tree.nodes.new("ShaderNodeValToRGB")
-    ramp.location = (-200, 0)
-    # Black background (position 0)
-    ramp.color_ramp.elements[0].position = 0.0
-    ramp.color_ramp.elements[0].color = (0, 0, 0, 1)
-    # White lines (position 1)
-    ramp.color_ramp.elements[1].position = 1.0
-    ramp.color_ramp.elements[1].color = (1, 1, 1, 1)
+    math2 = tree.nodes.new("ShaderNodeMath")
+    math2.name = "Math.002"
+    math2.operation = 'DIVIDE'
+    math2.location = (-600, 0)
+    math2.inputs[1].default_value = 3.0
 
-    # Emission shader
+    math3 = tree.nodes.new("ShaderNodeMath")
+    math3.name = "Math.003"
+    math3.operation = 'DIVIDE'
+    math3.location = (-600, -200)
+    math3.inputs[1].default_value = 1.0
+
+    # Three Wireframe nodes with use_pixel_size = True
+    wireframe1 = tree.nodes.new("ShaderNodeWireframe")
+    wireframe1.name = "Wireframe.001"
+    wireframe1.location = (-400, 200)
+    wireframe1.use_pixel_size = True
+
+    wireframe2 = tree.nodes.new("ShaderNodeWireframe")
+    wireframe2.name = "Wireframe.002"
+    wireframe2.location = (-400, 0)
+    wireframe2.use_pixel_size = True
+
+    wireframe3 = tree.nodes.new("ShaderNodeWireframe")
+    wireframe3.name = "Wireframe.003"
+    wireframe3.location = (-400, -200)
+    wireframe3.use_pixel_size = True
+
+    # Mix nodes to blend the wireframes
+    mix1 = tree.nodes.new("ShaderNodeMix")
+    mix1.name = "Mix.001"
+    mix1.data_type = 'FLOAT'
+    mix1.location = (-200, 100)
+    mix1.inputs[0].default_value = 0.75  # Factor
+
+    mix2 = tree.nodes.new("ShaderNodeMix")
+    mix2.name = "Mix.002"
+    mix2.data_type = 'FLOAT'
+    mix2.location = (-200, -100)
+    mix2.inputs[0].default_value = 0.75  # Factor
+
+    mix3 = tree.nodes.new("ShaderNodeMix")
+    mix3.name = "Mix.003"
+    mix3.data_type = 'FLOAT'
+    mix3.location = (0, 0)
+    mix3.inputs[0].default_value = 0.466  # Factor (approximately)
+
+    # Emission shader - Grey color (0.8), strength from mix result
     emission = tree.nodes.new("ShaderNodeEmission")
-    emission.location = (0, 0)
-    emission.inputs['Strength'].default_value = 1.0
+    emission.location = (200, 0)
+    emission.inputs['Color'].default_value = (0.8, 0.8, 0.8, 1.0)
 
     # Material output
     output = tree.nodes.new("ShaderNodeOutputMaterial")
-    output.location = (200, 0)
+    output.location = (400, 0)
 
-    # Connect: Value → Wireframe.Size
-    tree.links.new(value_node.outputs[0], wireframe.inputs['Size'])
-    # Wireframe.Fac → ColorRamp
-    tree.links.new(wireframe.outputs['Fac'], ramp.inputs['Fac'])
-    # ColorRamp → Emission
-    tree.links.new(ramp.outputs['Color'], emission.inputs['Color'])
+    # Connect: Value → Math nodes
+    tree.links.new(value_node.outputs[0], math1.inputs[0])
+    tree.links.new(value_node.outputs[0], math2.inputs[0])
+    tree.links.new(value_node.outputs[0], math3.inputs[0])
+
+    # Connect: Math → Wireframe.Size
+    tree.links.new(math1.outputs[0], wireframe1.inputs['Size'])
+    tree.links.new(math2.outputs[0], wireframe2.inputs['Size'])
+    tree.links.new(math3.outputs[0], wireframe3.inputs['Size'])
+
+    # Connect: Wireframe → Mix
+    tree.links.new(wireframe1.outputs['Fac'], mix1.inputs[2])  # A
+    tree.links.new(wireframe2.outputs['Fac'], mix1.inputs[3])  # B
+    tree.links.new(wireframe2.outputs['Fac'], mix2.inputs[2])  # A
+    tree.links.new(wireframe3.outputs['Fac'], mix2.inputs[3])  # B
+
+    # Connect: Mix → Mix → Emission.Strength
+    tree.links.new(mix1.outputs[0], mix3.inputs[2])  # A
+    tree.links.new(mix2.outputs[0], mix3.inputs[3])  # B
+    tree.links.new(mix3.outputs[0], emission.inputs['Strength'])
+
     # Emission → Output
     tree.links.new(emission.outputs['Emission'], output.inputs['Surface'])
 
 
 def setup_paint_base_nodes(tree):
     """
-    Create nodes for paint base baking - IMPROVED VERSION.
+    Create nodes for paint base baking - EXACT TEXTOOLS IMPLEMENTATION.
 
-    Paint base provides a foundation for hand-painting by showing surface depth.
-    This uses AO (ambient occlusion) which is what most paint base maps are.
+    Uses the exact pattern from TexTools bake_paint_base material:
+    - Geometry.Pointiness → ColorRamp (0.441-0.641)
+    - Geometry.Normal → SeparateColor → Blue → ColorRamp (0-1)
+    - Geometry.Position → SeparateColor → Blue
+    - Mix all three together with factor 0.5
     """
-    # Ambient Occlusion node for surface depth
-    ao_node = tree.nodes.new("ShaderNodeAmbientOcclusion")
-    ao_node.location = (-400, 0)
-    ao_node.inputs['Distance'].default_value = 1.0
-    ao_node.samples = 16
-    ao_node.only_local = False
+    # Geometry node
+    geo_node = tree.nodes.new("ShaderNodeNewGeometry")
+    geo_node.name = "Geometry"
+    geo_node.location = (-733, -93)
 
-    # Color ramp to adjust contrast
-    ramp = tree.nodes.new("ShaderNodeValToRGB")
-    ramp.location = (-200, 0)
-    # Darker shadows
-    ramp.color_ramp.elements[0].position = 0.2
-    ramp.color_ramp.elements[0].color = (0.1, 0.1, 0.15, 1)
-    # Lighter highlights
-    ramp.color_ramp.elements[1].position = 0.8
-    ramp.color_ramp.elements[1].color = (0.9, 0.9, 0.95, 1)
+    # ColorRamp for Pointiness
+    ramp_pointiness = tree.nodes.new("ShaderNodeValToRGB")
+    ramp_pointiness.name = "ColorRamp"
+    ramp_pointiness.location = (-319, 14)
+    ramp_pointiness.color_ramp.elements[0].position = 0.441
+    ramp_pointiness.color_ramp.elements[0].color = (0, 0, 0, 1)
+    ramp_pointiness.color_ramp.elements[1].position = 0.641
+    ramp_pointiness.color_ramp.elements[1].color = (1, 1, 1, 1)
+
+    # Separate Color for Normal
+    sep_normal = tree.nodes.new("ShaderNodeSeparateColor")
+    sep_normal.name = "Separate Color"
+    sep_normal.location = (-513, -224)
+
+    # ColorRamp for Normal Blue
+    ramp_normal = tree.nodes.new("ShaderNodeValToRGB")
+    ramp_normal.name = "ColorRamp.001"
+    ramp_normal.location = (-315, -220)
+    ramp_normal.color_ramp.elements[0].position = 0.0
+    ramp_normal.color_ramp.elements[0].color = (0, 0, 0, 1)
+    ramp_normal.color_ramp.elements[1].position = 1.0
+    ramp_normal.color_ramp.elements[1].color = (1, 1, 1, 1)
+
+    # Separate Color for Position
+    sep_position = tree.nodes.new("ShaderNodeSeparateColor")
+    sep_position.name = "Separate Color.001"
+    sep_position.location = (-513, 65)
+
+    # Mix.001: Pointiness + Normal Blue
+    mix1 = tree.nodes.new("ShaderNodeMix")
+    mix1.name = "Mix.001"
+    mix1.data_type = 'FLOAT'
+    mix1.location = (-111, -64)
+    mix1.inputs[0].default_value = 0.5  # Factor
+
+    # Mix: Mix.001 + Position Blue
+    mix2 = tree.nodes.new("ShaderNodeMix")
+    mix2.name = "Mix"
+    mix2.data_type = 'FLOAT'
+    mix2.location = (81, 2)
+    mix2.inputs[0].default_value = 0.5  # Factor
 
     # Emission
     emission = tree.nodes.new("ShaderNodeEmission")
-    emission.location = (0, 0)
+    emission.location = (302, 0)
 
     # Output
     output = tree.nodes.new("ShaderNodeOutputMaterial")
-    output.location = (200, 0)
+    output.location = (522, 0)
 
-    # Connect
-    tree.links.new(ao_node.outputs['Color'], ramp.inputs['Fac'])
-    tree.links.new(ramp.outputs['Color'], emission.inputs['Color'])
+    # Connect: Geometry → Pointiness → ColorRamp
+    tree.links.new(geo_node.outputs['Pointiness'], ramp_pointiness.inputs['Fac'])
+
+    # Connect: Geometry → Normal → SeparateColor → Blue → ColorRamp
+    tree.links.new(geo_node.outputs['Normal'], sep_normal.inputs['Color'])
+    tree.links.new(sep_normal.outputs['Blue'], ramp_normal.inputs['Fac'])
+
+    # Connect: Geometry → Position → SeparateColor → Blue
+    tree.links.new(geo_node.outputs['Position'], sep_position.inputs['Color'])
+
+    # Connect: ColorRamps → Mix.001
+    tree.links.new(ramp_pointiness.outputs['Color'], mix1.inputs[2])  # A
+    tree.links.new(ramp_normal.outputs['Color'], mix1.inputs[3])      # B
+
+    # Connect: Mix.001 + Position Blue → Mix
+    tree.links.new(mix1.outputs[0], mix2.inputs[2])                    # A
+    tree.links.new(sep_position.outputs['Blue'], mix2.inputs[3])       # B
+
+    # Connect: Mix → Emission.Color
+    tree.links.new(mix2.outputs[0], emission.inputs['Color'])
+
+    # Connect: Emission → Output
     tree.links.new(emission.outputs['Emission'], output.inputs['Surface'])
 
 
