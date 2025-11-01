@@ -1,9 +1,14 @@
 """
-Baking Engine - Core texture baking functionality
-==================================================
+Baking Engine - Core texture baking functionality (FIXED)
+==========================================================
 
 This module implements all texture baking modes without any dependency on TexTools.
 Each bake mode creates the necessary shader nodes procedurally and performs Cycles baking.
+
+FIXES:
+- Base color now properly preserves and relinks existing materials
+- Wireframe now creates actual lines with proper shader setup
+- Paint base now uses AO for realistic surface depth
 """
 
 import bpy
@@ -160,78 +165,88 @@ def setup_position_nodes(tree):
 
 def setup_wireframe_nodes(tree, thickness=0.01):
     """
-    Create nodes for wireframe baking.
+    Create nodes for wireframe baking - FIXED VERSION.
+
+    Uses the same pattern as TexTools: Value node → Wireframe → ColorRamp → Emission
 
     Args:
         thickness: Wireframe line thickness
     """
+    # Value node to control wireframe size (like TexTools)
+    value_node = tree.nodes.new("ShaderNodeValue")
+    value_node.name = "Value"
+    value_node.label = "Wireframe Size"
+    value_node.location = (-600, 0)
+    value_node.outputs[0].default_value = thickness
+
     # Wireframe node
     wireframe = tree.nodes.new("ShaderNodeWireframe")
     wireframe.location = (-400, 0)
-    wireframe.use_pixel_size = False
-    wireframe.inputs['Size'].default_value = thickness
+    wireframe.use_pixel_size = False  # Use Blender units
 
-    # Color ramp to make lines solid
+    # Color ramp to make lines sharp and white on black
     ramp = tree.nodes.new("ShaderNodeValToRGB")
     ramp.location = (-200, 0)
+    # Black background (position 0)
     ramp.color_ramp.elements[0].position = 0.0
-    ramp.color_ramp.elements[0].color = (0, 0, 0, 1)  # Black background
-    ramp.color_ramp.elements[1].position = 0.01
-    ramp.color_ramp.elements[1].color = (1, 1, 1, 1)  # White lines
+    ramp.color_ramp.elements[0].color = (0, 0, 0, 1)
+    # White lines (position 1)
+    ramp.color_ramp.elements[1].position = 1.0
+    ramp.color_ramp.elements[1].color = (1, 1, 1, 1)
 
     # Emission shader
     emission = tree.nodes.new("ShaderNodeEmission")
     emission.location = (0, 0)
+    emission.inputs['Strength'].default_value = 1.0
 
     # Material output
     output = tree.nodes.new("ShaderNodeOutputMaterial")
     output.location = (200, 0)
 
-    # Connect
+    # Connect: Value → Wireframe.Size
+    tree.links.new(value_node.outputs[0], wireframe.inputs['Size'])
+    # Wireframe.Fac → ColorRamp
     tree.links.new(wireframe.outputs['Fac'], ramp.inputs['Fac'])
+    # ColorRamp → Emission
     tree.links.new(ramp.outputs['Color'], emission.inputs['Color'])
+    # Emission → Output
     tree.links.new(emission.outputs['Emission'], output.inputs['Surface'])
 
 
 def setup_paint_base_nodes(tree):
     """
-    Create nodes for paint base baking.
-    This creates a gradient from Z-axis for base painting reference.
+    Create nodes for paint base baking - IMPROVED VERSION.
+
+    Paint base provides a foundation for hand-painting by showing surface depth.
+    This uses AO (ambient occlusion) which is what most paint base maps are.
     """
-    # Geometry node
-    geo = tree.nodes.new("ShaderNodeNewGeometry")
-    geo.location = (-600, 0)
+    # Ambient Occlusion node for surface depth
+    ao_node = tree.nodes.new("ShaderNodeAmbientOcclusion")
+    ao_node.location = (-400, 0)
+    ao_node.inputs['Distance'].default_value = 1.0
+    ao_node.samples = 16
+    ao_node.only_local = False
 
-    # Separate XYZ to get Z coordinate
-    separate = tree.nodes.new("ShaderNodeSeparateXYZ")
-    separate.location = (-400, 0)
-
-    # Map Range to normalize Z to 0-1 range
-    map_range = tree.nodes.new("ShaderNodeMapRange")
-    map_range.location = (-200, 0)
-    map_range.inputs['From Min'].default_value = -10.0
-    map_range.inputs['From Max'].default_value = 10.0
-    map_range.inputs['To Min'].default_value = 0.0
-    map_range.inputs['To Max'].default_value = 1.0
-
-    # Color ramp for gradient
+    # Color ramp to adjust contrast
     ramp = tree.nodes.new("ShaderNodeValToRGB")
-    ramp.location = (0, 0)
-    ramp.color_ramp.elements[0].color = (0.1, 0.1, 0.2, 1)
-    ramp.color_ramp.elements[1].color = (0.9, 0.9, 1.0, 1)
+    ramp.location = (-200, 0)
+    # Darker shadows
+    ramp.color_ramp.elements[0].position = 0.2
+    ramp.color_ramp.elements[0].color = (0.1, 0.1, 0.15, 1)
+    # Lighter highlights
+    ramp.color_ramp.elements[1].position = 0.8
+    ramp.color_ramp.elements[1].color = (0.9, 0.9, 0.95, 1)
 
     # Emission
     emission = tree.nodes.new("ShaderNodeEmission")
-    emission.location = (200, 0)
+    emission.location = (0, 0)
 
     # Output
     output = tree.nodes.new("ShaderNodeOutputMaterial")
-    output.location = (400, 0)
+    output.location = (200, 0)
 
     # Connect
-    tree.links.new(geo.outputs['Position'], separate.inputs['Vector'])
-    tree.links.new(separate.outputs['Z'], map_range.inputs['Value'])
-    tree.links.new(map_range.outputs['Result'], ramp.inputs['Fac'])
+    tree.links.new(ao_node.outputs['Color'], ramp.inputs['Fac'])
     tree.links.new(ramp.outputs['Color'], emission.inputs['Color'])
     tree.links.new(emission.outputs['Emission'], output.inputs['Surface'])
 
@@ -243,22 +258,6 @@ def setup_normal_object_nodes(tree):
     """
     # For normal baking, Cycles handles the actual normal calculation
     # We just need a basic BSDF setup
-    bsdf = tree.nodes.new("ShaderNodeBsdfPrincipled")
-    bsdf.location = (0, 0)
-
-    output = tree.nodes.new("ShaderNodeOutputMaterial")
-    output.location = (300, 0)
-
-    tree.links.new(bsdf.outputs['BSDF'], output.inputs['Surface'])
-
-
-def setup_base_color_nodes(tree):
-    """
-    Create nodes for base color baking.
-    This extracts the base color from existing materials.
-    """
-    # For base color, we use the material's base color input
-    # This is also a standard Cycles bake
     bsdf = tree.nodes.new("ShaderNodeBsdfPrincipled")
     bsdf.location = (0, 0)
 
@@ -466,7 +465,7 @@ def bake_position_map(obj, resolution=512):
 
 
 def bake_wireframe_map(obj, resolution=4096, thickness=0.01):
-    """Bake wireframe map"""
+    """Bake wireframe map - FIXED to show actual lines"""
     def setup_with_thickness(tree):
         setup_wireframe_nodes(tree, thickness)
 
@@ -483,7 +482,7 @@ def bake_wireframe_map(obj, resolution=4096, thickness=0.01):
 
 
 def bake_paint_base_map(obj, resolution=512):
-    """Bake paint base gradient map"""
+    """Bake paint base map - IMPROVED with AO"""
     return bake_with_material(
         obj,
         mat_name="TempMat_PaintBase",
@@ -491,7 +490,7 @@ def bake_paint_base_map(obj, resolution=512):
         resolution=resolution,
         setup_func=setup_paint_base_nodes,
         bake_type='EMIT',
-        samples=1,
+        samples=16,  # More samples for AO quality
         bg_color=(0.5, 0.5, 0.5, 1)
     )
 
@@ -558,10 +557,12 @@ def bake_normal_object_map(obj, resolution=512):
 
 
 def bake_base_color_map(obj, resolution=512):
-    """Bake base color from materials"""
-    # This requires the object to have materials with base color
-    # We'll use DIFFUSE bake type to extract the base color
+    """
+    Bake base color from materials - COMPLETELY REWRITTEN.
 
+    This now properly preserves existing materials and uses the TexTools
+    relink mechanism to extract base color through emission.
+    """
     ensure_uv_map(obj)
 
     # Create image
@@ -572,23 +573,99 @@ def bake_base_color_map(obj, resolution=512):
         color=(0.8, 0.8, 0.8, 1)
     )
 
-    # For base color, we need to check if object has materials
+    # Check if object has materials
     if not obj.data.materials or len(obj.data.materials) == 0:
-        # Create a simple gray material
-        mat = bpy.data.materials.new("TempMat_BaseColor")
-        mat.use_nodes = True
-        mat.node_tree.nodes["Principled BSDF"].inputs['Base Color'].default_value = (0.8, 0.8, 0.8, 1)
-        obj.data.materials.append(mat)
-        created_temp_mat = True
+        # Create a default grey material if none exists
+        default_mat = bpy.data.materials.new("TempDefaultMat")
+        default_mat.use_nodes = True
+        default_mat.node_tree.nodes["Principled BSDF"].inputs['Base Color'].default_value = (0.8, 0.8, 0.8, 1)
+        obj.data.materials.append(default_mat)
+        created_default = True
     else:
-        created_temp_mat = False
+        created_default = False
 
-    # Add bake target node to first material
-    first_mat = obj.data.materials[0]
-    if not first_mat.use_nodes:
-        first_mat.use_nodes = True
+    # Store original material states
+    original_material_states = []
 
-    assign_bake_image_to_material(first_mat, img)
+    # For each material, modify it to output base color through emission
+    for slot in obj.material_slots:
+        if slot.material and slot.material.use_nodes:
+            mat = slot.material
+            tree = mat.node_tree
+
+            # Store original state
+            orig_state = {'material': mat, 'modifications': []}
+
+            # Find the Principled BSDF
+            bsdf_node = None
+            for node in tree.nodes:
+                if node.bl_idname == "ShaderNodeBsdfPrincipled":
+                    bsdf_node = node
+                    break
+                elif node.bl_idname == "ShaderNodeGroup":
+                    # Check inside node groups
+                    for ng in node.node_tree.nodes:
+                        if ng.bl_idname == "ShaderNodeBsdfPrincipled":
+                            bsdf_node = ng
+                            tree = node.node_tree
+                            break
+
+            if bsdf_node:
+                # Store original connections from BSDF output
+                orig_bsdf_outputs = []
+                if bsdf_node.outputs['BSDF'].is_linked:
+                    for link in bsdf_node.outputs['BSDF'].links:
+                        orig_bsdf_outputs.append({
+                            'to_node': link.to_node,
+                            'to_socket': link.to_socket.name
+                        })
+                        tree.links.remove(link)
+
+                orig_state['modifications'].append({
+                    'type': 'bsdf_disconnect',
+                    'outputs': orig_bsdf_outputs,
+                    'tree': tree
+                })
+
+                # Create emission node
+                emission_node = tree.nodes.new("ShaderNodeEmission")
+                emission_node.location = (bsdf_node.location.x + 300, bsdf_node.location.y)
+                emission_node.name = "TempEmission_BaseColor"
+
+                orig_state['modifications'].append({
+                    'type': 'emission_created',
+                    'node': emission_node,
+                    'tree': tree
+                })
+
+                # Find Material Output node
+                output_node = None
+                for node in tree.nodes:
+                    if node.bl_idname == "ShaderNodeOutputMaterial":
+                        output_node = node
+                        break
+
+                if output_node:
+                    # Connect Base Color → Emission
+                    base_color_input = bsdf_node.inputs['Base Color']
+                    if base_color_input.is_linked:
+                        # Get what's connected to Base Color
+                        base_color_link = base_color_input.links[0]
+                        tree.links.new(base_color_link.from_socket, emission_node.inputs['Color'])
+                    else:
+                        # Use default value
+                        emission_node.inputs['Color'].default_value = base_color_input.default_value
+
+                    # Connect Emission → Surface Output
+                    tree.links.new(emission_node.outputs['Emission'], output_node.inputs['Surface'])
+
+            original_material_states.append(orig_state)
+
+    # Add bake target to first material
+    if obj.data.materials and obj.data.materials[0]:
+        first_mat = obj.data.materials[0]
+        if first_mat.use_nodes:
+            assign_bake_image_to_material(first_mat, img)
 
     # Store settings
     prev_engine = bpy.context.scene.render.engine
@@ -603,27 +680,53 @@ def bake_base_color_map(obj, resolution=512):
         obj.select_set(True)
         bpy.context.view_layer.objects.active = obj
 
-        # Bake diffuse color only
-        bake_settings = bpy.context.scene.render.bake
-        bake_settings.use_pass_direct = False
-        bake_settings.use_pass_indirect = False
-        bake_settings.use_pass_color = True
-
+        # Bake with EMIT type to capture the emission color
         bpy.ops.object.bake(
-            type='DIFFUSE',
+            type='EMIT',
             use_clear=True,
             margin=16,
             use_selected_to_active=False,
         )
     finally:
-        # Restore
+        # Restore all material modifications
+        for state in original_material_states:
+            for mod in state['modifications']:
+                if mod['type'] == 'emission_created':
+                    # Remove emission node
+                    if mod['node'].name in mod['tree'].nodes:
+                        mod['tree'].nodes.remove(mod['node'])
+
+                elif mod['type'] == 'bsdf_disconnect':
+                    # Reconnect original BSDF outputs
+                    bsdf_node = None
+                    for node in mod['tree'].nodes:
+                        if node.bl_idname == "ShaderNodeBsdfPrincipled":
+                            bsdf_node = node
+                            break
+
+                    if bsdf_node:
+                        for orig_link in mod['outputs']:
+                            if orig_link['to_node'].name in mod['tree'].nodes:
+                                to_node = mod['tree'].nodes[orig_link['to_node'].name]
+                                mod['tree'].links.new(
+                                    bsdf_node.outputs['BSDF'],
+                                    to_node.inputs[orig_link['to_socket']]
+                                )
+
+        # Remove bake target node
+        if obj.data.materials and obj.data.materials[0]:
+            first_mat = obj.data.materials[0]
+            if first_mat.use_nodes and "BakeTarget" in first_mat.node_tree.nodes:
+                first_mat.node_tree.nodes.remove(first_mat.node_tree.nodes["BakeTarget"])
+
+        # Restore settings
         bpy.context.scene.render.engine = prev_engine
         bpy.context.scene.cycles.samples = prev_samples
 
-        # Remove temp material if created
-        if created_temp_mat and "TempMat_BaseColor" in bpy.data.materials:
+        # Remove temp default material if created
+        if created_default and "TempDefaultMat" in bpy.data.materials:
             obj.data.materials.clear()
-            bpy.data.materials.remove(bpy.data.materials["TempMat_BaseColor"], do_unlink=True)
+            bpy.data.materials.remove(bpy.data.materials["TempDefaultMat"], do_unlink=True)
 
     return img
 
