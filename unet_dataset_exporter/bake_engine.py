@@ -560,7 +560,7 @@ def bake_cycles(obj, bake_type='EMIT', samples=1, margin=16, use_clear=True):
     bpy.context.scene.cycles.samples = prev_samples
 
 
-def bake_with_material(obj, mat_name, image_name, resolution, setup_func, bake_type='EMIT', samples=1, bg_color=(0,0,0,1), margin=16):
+def bake_with_material(obj, mat_name, image_name, resolution, setup_func, bake_type='EMIT', samples=1, bg_color=(0,0,0,1)):
     """
     Generic baking function with custom material.
 
@@ -573,7 +573,6 @@ def bake_with_material(obj, mat_name, image_name, resolution, setup_func, bake_t
         bake_type: Cycles bake type
         samples: Render samples
         bg_color: Background color
-        margin: Bake margin in pixels
 
     Returns:
         Baked image
@@ -593,7 +592,7 @@ def bake_with_material(obj, mat_name, image_name, resolution, setup_func, bake_t
 
     try:
         # Bake
-        bake_cycles(obj, bake_type=bake_type, samples=samples, margin=margin)
+        bake_cycles(obj, bake_type=bake_type, samples=samples)
     finally:
         # Restore materials
         restore_materials(obj, orig_mats)
@@ -622,66 +621,21 @@ def bake_position_map(obj, resolution=512):
     )
 
 
-def bake_wireframe_map(obj, resolution=4096, thickness=0.01, super_sampling=4):
-    """
-    Bake wireframe map with super-sampling for crisp lines.
-
-    Super-sampling (like TexTools) bakes at higher resolution then downsamples
-    to provide anti-aliasing for thin wireframe lines. This prevents missing edges
-    and dotted line artifacts.
-
-    Args:
-        obj: Object to bake
-        resolution: Final output resolution
-        thickness: Wireframe thickness in pixels
-        super_sampling: Super-sampling multiplier (1=none, 2=2x, 4=4x)
-    """
+def bake_wireframe_map(obj, resolution=4096, thickness=0.01):
+    """Bake wireframe map - FIXED to show actual lines"""
     def setup_with_thickness(tree):
         setup_wireframe_nodes(tree, thickness)
 
-    # Calculate super-sampled resolution
-    bake_resolution = resolution * super_sampling
-    margin_pixels = 16 * super_sampling  # Scale margin with resolution
-
-    print(f"    Wireframe: super-sampling {super_sampling}x ({bake_resolution}x{bake_resolution} -> {resolution}x{resolution})")
-
-    # Bake at high resolution with scaled margin
-    high_res_img = bake_with_material(
+    return bake_with_material(
         obj,
         mat_name="TempMat_Wireframe",
-        image_name=f"{obj.name}_wireframe_hires",
-        resolution=bake_resolution,
+        image_name=f"{obj.name}_wireframe",
+        resolution=resolution,
         setup_func=setup_with_thickness,
         bake_type='EMIT',
         samples=1,
-        bg_color=(0, 0, 0, 1),
-        margin=margin_pixels
+        bg_color=(0, 0, 0, 1)
     )
-
-    if super_sampling == 1:
-        # No downsampling needed
-        high_res_img.name = f"{obj.name}_wireframe"
-        return high_res_img
-
-    # Create final resolution image
-    final_img = create_bake_image(
-        f"{obj.name}_wireframe",
-        resolution,
-        resolution,
-        color=(0, 0, 0, 1)
-    )
-
-    # Downsample high-res to final resolution
-    high_res_img.scale(resolution, resolution)
-
-    # Copy pixels from high-res to final
-    final_img.pixels = high_res_img.pixels[:]
-
-    # Clean up high-res image
-    if high_res_img.name in bpy.data.images:
-        bpy.data.images.remove(high_res_img, do_unlink=True)
-
-    return final_img
 
 
 def bake_paint_base_map(obj, resolution=512):

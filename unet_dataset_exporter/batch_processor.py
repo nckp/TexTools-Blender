@@ -182,13 +182,6 @@ def cleanup_after_mesh(baked_images, auto_cleanup=True):
         if image and image.name in bpy.data.images:
             bpy.data.images.remove(image, do_unlink=True)
 
-    # Clean up unused data blocks
-    utils.cleanup_unused_data()
-
-    # Force garbage collection
-    import gc
-    gc.collect()
-
 
 def process_dataset(context, selected_meshes, settings, operator):
     """
@@ -249,12 +242,6 @@ def process_dataset(context, selected_meshes, settings, operator):
     all_stats = []
     total_start_time = time.time()
 
-    # Disable undo to save massive amounts of memory
-    # This is critical for processing thousands of meshes
-    undo_steps_prev = bpy.context.preferences.edit.undo_steps
-    bpy.context.preferences.edit.undo_steps = 0
-    print(f"\nDisabled undo system (was {undo_steps_prev} steps) to save memory")
-
     try:
         # Determine batch size
         batch_size = settings.batch_size if settings.batch_size > 0 else len(selected_meshes)
@@ -287,11 +274,6 @@ def process_dataset(context, selected_meshes, settings, operator):
                     # Cleanup after each mesh if auto cleanup enabled
                     cleanup_after_mesh(baked_images, settings.auto_cleanup)
 
-                    # Aggressive cleanup every 10 meshes to prevent memory buildup
-                    if settings.auto_cleanup and (global_idx % 10 == 0):
-                        print(f"\n  [Mesh {global_idx}] Periodic deep cleanup...")
-                        utils.aggressive_cleanup()
-
                 except Exception as e:
                     error_msg = f"Error processing {obj.name}: {str(e)}"
                     print(f"\n✗ {error_msg}")
@@ -313,10 +295,6 @@ def process_dataset(context, selected_meshes, settings, operator):
                 utils.cleanup_unused_data()
 
     finally:
-        # Restore undo system
-        bpy.context.preferences.edit.undo_steps = undo_steps_prev
-        print(f"\nRestored undo system ({undo_steps_prev} steps)")
-
         # Restore initial state
         bpy.ops.object.select_all(action='DESELECT')
         for obj in initial_selection:

@@ -7,7 +7,6 @@ Common utility functions for dataset export.
 
 import bpy
 import re
-import gc
 
 
 def sanitize_filename(name):
@@ -92,8 +91,6 @@ def cleanup_unused_data():
         'materials': 0,
         'textures': 0,
         'meshes': 0,
-        'cameras': 0,
-        'objects': 0,
     }
 
     # Remove unused images
@@ -120,54 +117,10 @@ def cleanup_unused_data():
             bpy.data.meshes.remove(mesh, do_unlink=True)
             counts['meshes'] += 1
 
-    # Remove unused cameras
-    for cam in list(bpy.data.cameras):
-        if cam.users == 0:
-            bpy.data.cameras.remove(cam, do_unlink=True)
-            counts['cameras'] += 1
-
-    # Remove orphaned objects (like temp empties)
-    for obj in list(bpy.data.objects):
-        if obj.users == 0:
-            bpy.data.objects.remove(obj, do_unlink=True)
-            counts['objects'] += 1
-
     if any(counts.values()):
         print(f"  Cleaned up unused data: {counts}")
 
     return counts
-
-
-def aggressive_cleanup():
-    """
-    Aggressive memory cleanup for large batch processing.
-
-    This function performs deep cleanup including:
-    - Orphaned data purging
-    - Python garbage collection
-    - Blender internal cache clearing
-
-    Use this periodically (e.g., every 10-20 meshes) to prevent memory buildup.
-    """
-    print("  Performing aggressive cleanup...")
-
-    # Clean up unused data
-    cleanup_unused_data()
-
-    # Purge orphaned data (data blocks with 0 users)
-    bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
-
-    # Force Python garbage collection
-    gc.collect()
-
-    # Clear Blender's internal caches
-    # Note: This may slow down subsequent operations slightly but frees memory
-    try:
-        bpy.ops.wm.memory_statistics()  # Force update
-    except:
-        pass
-
-    print("  ✓ Aggressive cleanup complete")
 
 
 def get_mesh_info(obj):
