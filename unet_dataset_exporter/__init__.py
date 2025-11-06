@@ -92,6 +92,17 @@ class UNetExporterSettings(PropertyGroup):
         max=10.0
     )
 
+    wireframe_sampling: EnumProperty(
+        name="Wireframe AA",
+        description="Anti-aliasing for wireframe (higher = better quality, slower)",
+        items=[
+            ('1', 'None', 'No anti-aliasing (fast)'),
+            ('2', '2x', 'Render 2x and downsample'),
+            ('4', '4x', 'Render 4x and downsample (recommended)'),
+        ],
+        default='1'
+    )
+
     # Bake mode selection
     bake_position: BoolProperty(name="Position", default=True)
     bake_wireframe: BoolProperty(name="Wireframe", default=True)
@@ -295,6 +306,7 @@ class UNET_PT_MainPanel(Panel):
         # Wireframe settings
         if settings.bake_wireframe:
             box.prop(settings, "wireframe_thickness")
+            box.prop(settings, "wireframe_sampling")
 
         # Camera settings
         box = layout.box()

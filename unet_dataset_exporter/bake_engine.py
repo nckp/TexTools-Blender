@@ -621,21 +621,45 @@ def bake_position_map(obj, resolution=512):
     )
 
 
-def bake_wireframe_map(obj, resolution=4096, thickness=0.01):
-    """Bake wireframe map - FIXED to show actual lines"""
+def bake_wireframe_map(obj, resolution=4096, thickness=0.01, sampling_scale=1):
+    """
+    Bake wireframe map with optional super-sampling.
+
+    Follows TexTools implementation exactly:
+    - Create image at (resolution * sampling_scale)
+    - Bake at that resolution
+    - Downscale to target resolution if sampling_scale > 1
+
+    Args:
+        obj: Object to bake
+        resolution: Target output resolution
+        thickness: Wireframe line thickness in pixels
+        sampling_scale: Super-sampling multiplier (1, 2, or 4)
+    """
     def setup_with_thickness(tree):
         setup_wireframe_nodes(tree, thickness)
 
-    return bake_with_material(
+    # Calculate bake resolution (higher if super-sampling)
+    bake_resolution = resolution * sampling_scale
+
+    # Create and bake image at bake_resolution
+    img = bake_with_material(
         obj,
         mat_name="TempMat_Wireframe",
         image_name=f"{obj.name}_wireframe",
-        resolution=resolution,
+        resolution=bake_resolution,
         setup_func=setup_with_thickness,
         bake_type='EMIT',
         samples=1,
         bg_color=(0, 0, 0, 1)
     )
+
+    # Downscale if super-sampled (exactly like TexTools line 542)
+    if sampling_scale > 1:
+        print(f"    Downscaling wireframe: {bake_resolution} → {resolution}")
+        img.scale(resolution, resolution)
+
+    return img
 
 
 def bake_paint_base_map(obj, resolution=512):
@@ -989,8 +1013,9 @@ def bake_all_modes(obj, settings):
         baked_images['position'] = bake_position_map(obj, settings.bake_resolution)
 
     if settings.bake_wireframe:
+        sampling_scale = int(settings.wireframe_sampling)
         baked_images['wireframe'] = bake_wireframe_map(
-            obj, settings.wireframe_resolution, settings.wireframe_thickness
+            obj, settings.wireframe_resolution, settings.wireframe_thickness, sampling_scale
         )
 
     if settings.bake_paint_base:

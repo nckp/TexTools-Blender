@@ -274,6 +274,11 @@ def process_dataset(context, selected_meshes, settings, operator):
                     # Cleanup after each mesh if auto cleanup enabled
                     cleanup_after_mesh(baked_images, settings.auto_cleanup)
 
+                    # Additional periodic cleanup every 20 meshes to prevent memory buildup
+                    if settings.auto_cleanup and (global_idx % 20 == 0):
+                        print(f"  [Mesh {global_idx}] Running periodic cleanup...")
+                        utils.cleanup_unused_data()
+
                 except Exception as e:
                     error_msg = f"Error processing {obj.name}: {str(e)}"
                     print(f"\n✗ {error_msg}")
