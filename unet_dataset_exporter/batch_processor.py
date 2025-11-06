@@ -182,20 +182,6 @@ def cleanup_after_mesh(baked_images, auto_cleanup=True):
         if image and image.name in bpy.data.images:
             bpy.data.images.remove(image, do_unlink=True)
 
-    # Basic cleanup of unused data blocks
-    # This is safe and helps prevent memory buildup
-    for img in list(bpy.data.images):
-        if img.users == 0:
-            bpy.data.images.remove(img, do_unlink=True)
-
-    for mat in list(bpy.data.materials):
-        if mat.users == 0:
-            bpy.data.materials.remove(mat, do_unlink=True)
-
-    for cam in list(bpy.data.cameras):
-        if cam.users == 0:
-            bpy.data.cameras.remove(cam, do_unlink=True)
-
 
 def process_dataset(context, selected_meshes, settings, operator):
     """
