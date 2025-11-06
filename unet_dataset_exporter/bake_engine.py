@@ -560,7 +560,7 @@ def bake_cycles(obj, bake_type='EMIT', samples=1, margin=16, use_clear=True):
     bpy.context.scene.cycles.samples = prev_samples
 
 
-def bake_with_material(obj, mat_name, image_name, resolution, setup_func, bake_type='EMIT', samples=1, bg_color=(0,0,0,1)):
+def bake_with_material(obj, mat_name, image_name, resolution, setup_func, bake_type='EMIT', samples=1, bg_color=(0,0,0,1), margin=16):
     """
     Generic baking function with custom material.
 
@@ -573,6 +573,7 @@ def bake_with_material(obj, mat_name, image_name, resolution, setup_func, bake_t
         bake_type: Cycles bake type
         samples: Render samples
         bg_color: Background color
+        margin: Bake margin in pixels
 
     Returns:
         Baked image
@@ -592,7 +593,7 @@ def bake_with_material(obj, mat_name, image_name, resolution, setup_func, bake_t
 
     try:
         # Bake
-        bake_cycles(obj, bake_type=bake_type, samples=samples)
+        bake_cycles(obj, bake_type=bake_type, samples=samples, margin=margin)
     finally:
         # Restore materials
         restore_materials(obj, orig_mats)
@@ -621,21 +622,61 @@ def bake_position_map(obj, resolution=512):
     )
 
 
-def bake_wireframe_map(obj, resolution=4096, thickness=0.01):
-    """Bake wireframe map - FIXED to show actual lines"""
-    def setup_with_thickness(tree):
-        setup_wireframe_nodes(tree, thickness)
+def bake_wireframe_map(obj, resolution=4096, thickness=0.01, super_sampling=4):
+    """
+    Bake wireframe map with super-sampling for better line quality.
 
-    return bake_with_material(
+    Super-sampling (like TexTools optional AA) renders at higher resolution
+    then downsamples to eliminate aliasing on thin wireframe lines.
+
+    Args:
+        obj: Object to bake
+        resolution: Final output resolution
+        thickness: Wireframe thickness in pixels
+        super_sampling: Multiplier for super-sampling (1=off, 2=2x, 4=4x recommended)
+    """
+    if super_sampling <= 1:
+        # No super-sampling, bake normally
+        def setup_with_thickness(tree):
+            setup_wireframe_nodes(tree, thickness)
+
+        return bake_with_material(
+            obj,
+            mat_name="TempMat_Wireframe",
+            image_name=f"{obj.name}_wireframe",
+            resolution=resolution,
+            setup_func=setup_with_thickness,
+            bake_type='EMIT',
+            samples=1,
+            bg_color=(0, 0, 0, 1)
+        )
+
+    # Super-sampling enabled
+    bake_res = resolution * super_sampling
+    margin_scaled = 16 * super_sampling
+
+    print(f"    Wireframe super-sampling: {super_sampling}x ({bake_res} → {resolution})")
+
+    # Bake at high resolution
+    def setup_with_thickness(tree):
+        setup_wireframe_nodes(tree, thickness * super_sampling)  # Scale thickness too
+
+    high_res_img = bake_with_material(
         obj,
         mat_name="TempMat_Wireframe",
-        image_name=f"{obj.name}_wireframe",
-        resolution=resolution,
+        image_name=f"{obj.name}_wireframe",  # Use final name directly
+        resolution=bake_res,
         setup_func=setup_with_thickness,
         bake_type='EMIT',
         samples=1,
-        bg_color=(0, 0, 0, 1)
+        bg_color=(0, 0, 0, 1),
+        margin=margin_scaled
     )
+
+    # Downscale using Blender's built-in method (same as TexTools)
+    high_res_img.scale(resolution, resolution)
+
+    return high_res_img
 
 
 def bake_paint_base_map(obj, resolution=512):
